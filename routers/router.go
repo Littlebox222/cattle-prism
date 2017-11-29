@@ -8,8 +8,8 @@
 package routers
 
 import (
-	"github.com/astaxie/beego"
 	"cattle-prism/controllers"
+	"github.com/astaxie/beego"
 	// "github.com/astaxie/beego/context"
 	// "net/http/httputil"
 	// "net/url"
@@ -32,8 +32,15 @@ import (
 // 	beego.AddNamespace(ns)
 // }
 
-
 func init() {
+
+	beego.Router("/bsgroups", &controllers.GroupController{})
+	beego.Router("/bsidcs", &controllers.IdcController{})
+	beego.Router("/bsareas", &controllers.AreaController{})
+	beego.Router("/bscarrieroperators", &controllers.CarrierOperatorController{})
+	beego.Router("/bsgroupidcmaps", &controllers.GroupIdcMapController{})
+
 	beego.Router("*", &controllers.AppController{})
+
 	// beego.Handler("/rpc", nil)
 }

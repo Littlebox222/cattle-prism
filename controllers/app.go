@@ -19,6 +19,9 @@ import (
 	"time"
 	// "net/http"
 	"strings"
+
+	"cattle-prism/dao"
+	"github.com/astaxie/beego/orm"
 )
 
 // Operations about Users
@@ -35,21 +38,79 @@ func init() {
 	if RancherEndpointHost = beego.AppConfig.String("RancherEndpointHost"); RancherEndpointHost == "" {
 		RancherEndpointHost = "127.0.0.1:8080"
 	}
+
+	orm.RegisterDriver("mysql", orm.DRMySQL)
+
+	dbConfig := dao.InitConfig()
+	dbConfigString := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8", dbConfig.User, dbConfig.Pass, dbConfig.Host, dbConfig.DbName)
+	orm.RegisterDataBase("default", "mysql", dbConfigString)
+
+	orm.RegisterModel(new(models.BsGroup))
+	orm.RegisterModel(new(models.BsIdc))
+	orm.RegisterModel(new(models.BsCarrierOperator))
+	orm.RegisterModel(new(models.BsArea))
+	orm.RegisterModel(new(models.BsGroupIdcMap))
+	orm.RegisterModel(new(models.BsIdcHostMap))
+	orm.RegisterModel(new(models.Company))
 }
 
-func (this *AppController) ServeError(status int, err error, message string) {
-	logs.Error(err)
-	this.Data["json"] = &models.CattleError{
-		Type:     "error",
-		BaseType: "error",
-		Status:   status,
-		Code:     message,
-		Message:  message,
-		Detail:   err.Error(),
+func (this *AppController) ServeErrorWithDetail(status int, err error, message string, detail string) {
+
+	if err == nil || detail != "" {
+
+		cattleErr := &models.CattleError{
+			Type:     "error",
+			BaseType: "error",
+			Status:   status,
+			Code:     message,
+			Message:  message,
+			Detail:   detail,
+		}
+		logs.Error(cattleErr)
+		this.Data["json"] = cattleErr
+
+	} else {
+		logs.Error(err)
+
+		cattleErr := &models.CattleError{
+			Type:     "error",
+			BaseType: "error",
+			Status:   status,
+			Code:     message,
+			Message:  message,
+			Detail:   err.Error(),
+		}
+
+		this.Data["json"] = cattleErr
 	}
+
 	this.Ctx.Output.SetStatus(status)
 	this.ServeJSON()
 	this.StopRun()
+}
+
+func (this *AppController) ServeError(status int, err error, message string) {
+
+	if err == nil {
+
+		cattleErr := &models.CattleError{
+			Type:     "error",
+			BaseType: "error",
+			Status:   status,
+			Code:     message,
+			Message:  message,
+			Detail:   "",
+		}
+		logs.Error(cattleErr)
+		this.Data["json"] = cattleErr
+
+		this.Ctx.Output.SetStatus(status)
+		this.ServeJSON()
+		this.StopRun()
+
+	} else {
+		this.ServeErrorWithDetail(status, err, message, "")
+	}
 }
 
 func (this *AppController) GetUserInfo() {
