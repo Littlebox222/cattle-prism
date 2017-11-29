@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -e
+
+#./kill_process cattle-prism
+
+echo 'building......'
+go build -o cattle-prism main.go
+echo 'build success'
+./cattle-prism
+

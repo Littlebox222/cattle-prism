@@ -1,6 +1,5 @@
 package controllers
 
-//
 import (
 	"cattle-prism/models"
 	"encoding/json"
