@@ -1,22 +1,22 @@
 package controllers
 
 import (
+	"cattle-prism/models"
+	"cattle-prism/utils/wsutil"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/cache"
 	"github.com/astaxie/beego/httplib"
 	"github.com/astaxie/beego/logs"
-    "cattle-prism/utils/wsutil"
 	"github.com/gorilla/websocket"
-	"cattle-prism/models"
-	"fmt"
-	"regexp"
-	"time"
-	"errors"
-	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httputil"
-    "net/url"
-	"log"
+	"net/url"
+	"regexp"
+	"time"
 	// "net/http"
 	"strings"
 )
@@ -24,8 +24,8 @@ import (
 // Operations about Users
 type AppController struct {
 	beego.Controller
-	Token 			string
-	UserInfo		models.TokenDataItemUserIdentity
+	Token    string
+	UserInfo models.TokenDataItemUserIdentity
 }
 
 var RancherEndpointHost string
@@ -40,12 +40,12 @@ func init() {
 func (this *AppController) ServeError(status int, err error, message string) {
 	logs.Error(err)
 	this.Data["json"] = &models.CattleError{
-		Type:		"error",
-		BaseType:	"error",
-		Status:		status,
-		Code:		message,
-		Message:	message,
-		Detail:		err.Error(),
+		Type:     "error",
+		BaseType: "error",
+		Status:   status,
+		Code:     message,
+		Message:  message,
+		Detail:   err.Error(),
 	}
 	this.Ctx.Output.SetStatus(status)
 	this.ServeJSON()
@@ -77,14 +77,14 @@ func (this *AppController) GetUserInfo() {
 				this.UserInfo = tokenData.Data[0].UserIdentity
 				this.UserInfo.Cached = false
 				if this.UserInfo.Id != "" {
-					if err := UserInfoCache.Put(cacheKey, body, 60 * time.Second); err != nil {
+					if err := UserInfoCache.Put(cacheKey, body, 60*time.Second); err != nil {
 						this.ServeError(500, err, "Internal Server Error")
 					}
 				}
 				/*
-				this.Data["json"] = this.UserInfo
-				this.ServeJSON()
-				this.StopRun()
+					this.Data["json"] = this.UserInfo
+					this.ServeJSON()
+					this.StopRun()
 				*/
 			}
 		} else {
@@ -98,19 +98,18 @@ func (this *AppController) GetUserInfo() {
 					this.UserInfo = tokenData.Data[0].UserIdentity
 					this.UserInfo.Cached = true
 					/*
-					this.Data["json"] = this.UserInfo
-					this.ServeJSON()
-					this.StopRun()
+						this.Data["json"] = this.UserInfo
+						this.ServeJSON()
+						this.StopRun()
 					*/
 				}
 			} else {
 				UserInfoCache.Delete(cacheKey)
-			    this.ServeError(500, errors.New("Decoding Cache Data Error"), "Internal Server Error")
+				this.ServeError(500, errors.New("Decoding Cache Data Error"), "Internal Server Error")
 			}
 		}
 	}
 }
-
 
 func (this *AppController) Prepare() {
 	this.GetUserInfo()
@@ -127,7 +126,6 @@ func (this *AppController) Prepare() {
 	this.Proxy()
 }
 
-
 func (this *AppController) Proxy() {
 	if this.UserInfo.CompanyId != "" {
 		this.Ctx.Request.Header.Set("X-Company-Id", this.UserInfo.CompanyId)
@@ -135,30 +133,30 @@ func (this *AppController) Proxy() {
 	}
 
 	/*
-	if this.UserInfo.Cached {
-		this.Ctx.ResponseWriter.Header().Set("X-Userinfo-Cached", "True")
-	} else {
-		this.Ctx.ResponseWriter.Header().Set("X-Userinfo-Cached", "False")
-	}
+		if this.UserInfo.Cached {
+			this.Ctx.ResponseWriter.Header().Set("X-Userinfo-Cached", "True")
+		} else {
+			this.Ctx.ResponseWriter.Header().Set("X-Userinfo-Cached", "False")
+		}
 	*/
 
-    // this.Ctx.Request.SetBasicAuth("E37CE8E5038A794B25FC", "wQCfoBTrT8PBFUobT4oQJRHEDaBkuv3wwZi4fVCb")
-    if wsutil.IsWebSocketRequest(this.Ctx.Request) {
-        remoteWs := &url.URL{
-            Scheme: "ws://",
-            Host: RancherEndpointHost,
-        }
-        proxyWs := wsutil.NewSingleHostReverseProxy(remoteWs)
-        proxyWs.ServeHTTP(this.Ctx.ResponseWriter, this.Ctx.Request)
-    } else {
-        remoteHttp, err := url.Parse(`http://` + RancherEndpointHost)
-        if err != nil {
-            // panic(err)
+	// this.Ctx.Request.SetBasicAuth("E37CE8E5038A794B25FC", "wQCfoBTrT8PBFUobT4oQJRHEDaBkuv3wwZi4fVCb")
+	if wsutil.IsWebSocketRequest(this.Ctx.Request) {
+		remoteWs := &url.URL{
+			Scheme: "ws://",
+			Host:   RancherEndpointHost,
+		}
+		proxyWs := wsutil.NewSingleHostReverseProxy(remoteWs)
+		proxyWs.ServeHTTP(this.Ctx.ResponseWriter, this.Ctx.Request)
+	} else {
+		remoteHttp, err := url.Parse(`http://` + RancherEndpointHost)
+		if err != nil {
+			// panic(err)
 			logs.Error(err)
-        }
-        proxyHttp := httputil.NewSingleHostReverseProxy(remoteHttp)
-        proxyHttp.ServeHTTP(this.Ctx.ResponseWriter, this.Ctx.Request)
-    }
+		}
+		proxyHttp := httputil.NewSingleHostReverseProxy(remoteHttp)
+		proxyHttp.ServeHTTP(this.Ctx.ResponseWriter, this.Ctx.Request)
+	}
 }
 
 func (this *AppController) Subscribe() {
@@ -181,7 +179,7 @@ func (this *AppController) Subscribe() {
 
 	subscribeMessage := make(chan []byte)
 
-	filterUrl := `ws://` +  RancherEndpointHost + this.Ctx.Input.URI()
+	filterUrl := `ws://` + RancherEndpointHost + this.Ctx.Input.URI()
 	wsHeader := this.Ctx.Request.Header
 	wsHeader.Del("Sec-Websocket-Version")
 	wsHeader.Del("Connection")
@@ -234,7 +232,7 @@ func (this *AppController) Subscribe() {
 
 	for {
 		select {
-		case msg := <- subscribeMessage:
+		case msg := <-subscribeMessage:
 			err = c.WriteMessage(websocket.TextMessage, msg)
 			if err != nil {
 				log.Println("write:", err)
