@@ -11,3 +11,5 @@ cattle-prism.zip
 tmp/
 vendor_v2/
 *.swp
+api_doc.txt
+tables.txt

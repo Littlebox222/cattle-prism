@@ -48,9 +48,3 @@ type CattleError struct {
 	Detail   string            `json:"detail,omitempty"`
 	BaseType string            `json:"baseType,omitempty"`
 }
-
-type Company struct {
-	Id   int64  `json:id,omitempty`
-	Name string `json:name,omitempty`
-	Uuid string `json:uuid,omitempty"`
-}

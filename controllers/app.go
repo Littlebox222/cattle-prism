@@ -22,6 +22,7 @@ import (
 
 	"cattle-prism/dao"
 	"github.com/astaxie/beego/orm"
+	_ "github.com/go-sql-driver/mysql"
 )
 
 // Operations about Users
@@ -45,13 +46,15 @@ func init() {
 	dbConfigString := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8", dbConfig.User, dbConfig.Pass, dbConfig.Host, dbConfig.DbName)
 	orm.RegisterDataBase("default", "mysql", dbConfigString)
 
-	orm.RegisterModel(new(models.BsGroup))
-	orm.RegisterModel(new(models.BsIdc))
-	orm.RegisterModel(new(models.BsCarrierOperator))
-	orm.RegisterModel(new(models.BsArea))
-	orm.RegisterModel(new(models.BsGroupIdcMap))
-	orm.RegisterModel(new(models.BsIdcHostMap))
-	orm.RegisterModel(new(models.Company))
+	// orm.RegisterModel(new(models.BsGroup))
+	// orm.RegisterModel(new(models.BsIdc))
+	// orm.RegisterModel(new(models.BsCarrierOperator))
+	// orm.RegisterModel(new(models.BsArea))
+	// orm.RegisterModel(new(models.BsGroupIdcMap))
+	// orm.RegisterModel(new(models.BsIdcHostMap))
+	// orm.RegisterModel(new(models.Company))
+	orm.RegisterModel(new(models.BsUserResourceTotal))
+	orm.RegisterModel(new(models.BsContainerType))
 }
 
 func (this *AppController) ServeErrorWithDetail(status int, err error, message string, detail string) {

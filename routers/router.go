@@ -34,11 +34,12 @@ import (
 
 func init() {
 
-	beego.Router("/bsgroups", &controllers.GroupController{})
-	beego.Router("/bsidcs", &controllers.IdcController{})
-	beego.Router("/bsareas", &controllers.AreaController{})
-	beego.Router("/bscarrieroperators", &controllers.CarrierOperatorController{})
-	beego.Router("/bsgroupidcmaps", &controllers.GroupIdcMapController{})
+	// beego.Router("/bsgroups", &controllers.GroupController{})
+	// beego.Router("/bsidcs", &controllers.IdcController{})
+	// beego.Router("/bsareas", &controllers.AreaController{})
+	// beego.Router("/bscarrieroperators", &controllers.CarrierOperatorController{})
+	// beego.Router("/bsgroupidcmaps", &controllers.GroupIdcMapController{})
+	beego.Router("/bs-v1/resource/total", &controllers.BsUserResourceTotalController{})
 
 	beego.Router("*", &controllers.AppController{})
 
