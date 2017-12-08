@@ -23,6 +23,8 @@ import (
 	"cattle-prism/dao"
 	"github.com/astaxie/beego/orm"
 	_ "github.com/go-sql-driver/mysql"
+
+	"strconv"
 )
 
 // Operations about Users
@@ -46,15 +48,20 @@ func init() {
 	dbConfigString := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8", dbConfig.User, dbConfig.Pass, dbConfig.Host, dbConfig.DbName)
 	orm.RegisterDataBase("default", "mysql", dbConfigString)
 
-	// orm.RegisterModel(new(models.BsGroup))
-	// orm.RegisterModel(new(models.BsIdc))
-	// orm.RegisterModel(new(models.BsCarrierOperator))
-	// orm.RegisterModel(new(models.BsArea))
-	// orm.RegisterModel(new(models.BsGroupIdcMap))
+	orm.RegisterModel(new(models.BsGroup))
+	orm.RegisterModel(new(models.BsIdc))
+	orm.RegisterModel(new(models.BsCarrierOperator))
+	orm.RegisterModel(new(models.BsArea))
+	orm.RegisterModel(new(models.BsUserGroupIdcMap))
+	orm.RegisterModel(new(models.BsUserResourceInstanceMap))
 	// orm.RegisterModel(new(models.BsIdcHostMap))
-	// orm.RegisterModel(new(models.Company))
+	orm.RegisterModel(new(models.Company))
 	orm.RegisterModel(new(models.BsUserResourceTotal))
 	orm.RegisterModel(new(models.BsContainerType))
+
+	orm.RegisterModel(new(models.Environment))
+	orm.RegisterModel(new(models.Instance))
+	orm.RegisterModel(new(models.Service))
 }
 
 func (this *AppController) ServeErrorWithDetail(status int, err error, message string, detail string) {
@@ -178,12 +185,23 @@ func (this *AppController) GetUserInfo() {
 func (this *AppController) Prepare() {
 	this.GetUserInfo()
 
+	//websocket过滤
 	if wsutil.IsWebSocketRequest(this.Ctx.Request) && this.Ctx.Input.IsGet() {
 		re := regexp.MustCompile(`^/v2-beta/projects/[a-z0-9]+/subscribe$`)
 		if matched := re.MatchString(this.Ctx.Input.URL()); matched {
 			// fmt.Println(this.Ctx.Input.URL())
 			this.Subscribe()
 			return
+		}
+	}
+
+	//put、delete方法加身份验证
+	if this.Ctx.Input.IsPut() || this.Ctx.Input.IsDelete() {
+		re := regexp.MustCompile(`^/v2-beta/projects/[a-z0-9]+/(stacks|services|instances)/[a-z0-9]+$`)
+		if matched := re.MatchString(this.Ctx.Input.URL()); matched {
+			if ok := this.IdendityCheck(); !ok {
+				return
+			}
 		}
 	}
 
@@ -310,6 +328,48 @@ func (this *AppController) Subscribe() {
 		// }
 		// log.Printf("recv: %s", message)
 		// time.Sleep(time.Second)
+	}
+}
+
+func (this *AppController) IdendityCheck() bool {
+	//取id和type
+	params := this.Ctx.Input.Params()
+	itemId := params["3"]
+	reg := regexp.MustCompile(`\d+`)
+	itemIdNums := reg.FindAllStringSubmatch(itemId, -1)
+	itemIdNum, _ := strconv.ParseInt(itemIdNums[1][0], 10, 64)
+
+	orm.Debug = true
+	o := orm.NewOrm()
+
+	var itemType string
+	switch params["2"] {
+	case "stacks":
+		itemType = "environment"
+		break
+	case "services":
+		itemType = "service"
+		break
+	case "instances":
+		itemType = "instance"
+		break
+	default:
+		itemType = ""
+	}
+
+	//对应type的数据库里取company_id
+
+	sqlQueryString := fmt.Sprintf("SELECT `company_id` FROM %s WHERE id = %d", itemType, itemIdNum)
+	var companyIds []int64
+	if _, err := o.Raw(sqlQueryString).QueryRows(&companyIds); err != nil {
+		this.ServeError(500, err, "Internal Server Error")
+	}
+
+	if companyIds[0] != this.UserInfo.CompanyIdNum {
+		this.ServeErrorWithDetail(403, nil, "Forbidden", "Invalid Identity")
+		return false
+	} else {
+		return true
 	}
 }
 

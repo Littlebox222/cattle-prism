@@ -34,12 +34,20 @@ import (
 
 func init() {
 
-	// beego.Router("/bsgroups", &controllers.GroupController{})
-	// beego.Router("/bsidcs", &controllers.IdcController{})
-	// beego.Router("/bsareas", &controllers.AreaController{})
-	// beego.Router("/bscarrieroperators", &controllers.CarrierOperatorController{})
+	beego.Router("/v2-beta/projects/:project_id/groups/?:group_id", &controllers.GroupController{})
+	beego.Router("/v2-beta/projects/:project_id/idcs", &controllers.IdcController{})
+	beego.Router("/v2-beta/projects/:project_id/areas", &controllers.AreaController{})
+	beego.Router("/v2-beta/projects/:project_id/carrieroperators", &controllers.CarrierOperatorController{})
+	beego.Router("/v2-beta/projects/:project_id/resource/total", &controllers.BsUserResourceTotalController{})
+
+	beego.Router("/v2-beta/projects/:project_id/services/:service_id/groups", &controllers.GroupController{})
+	beego.Router("/v2-beta/projects/:project_id/services/:service_id/containertypes", &controllers.ContainerTypeController{})
+
 	// beego.Router("/bsgroupidcmaps", &controllers.GroupIdcMapController{})
-	beego.Router("/bs-v1/resource/total", &controllers.BsUserResourceTotalController{})
+	// beego.Router("/bs-v1/stacks/?:id", &controllers.BsStackController{})
+	// beego.Router("/bs-v1/services", &controllers.BsServiceController{})
+	// beego.Router("/bs-v1/instances", &controllers.BsInstanceController{})
+	// beego.Router("/bs-v1/auditlogs", &controllers.BsAuditLogController{})
 
 	beego.Router("*", &controllers.AppController{})
 
