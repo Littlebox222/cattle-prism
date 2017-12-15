@@ -3,6 +3,7 @@ package controllers
 import (
 	"cattle-prism/models"
 
+	"cattle-prism/utils"
 	"cattle-prism/utils/wsutil"
 	"encoding/json"
 	"errors"
@@ -24,7 +25,6 @@ import (
 	"cattle-prism/dao"
 	"github.com/astaxie/beego/orm"
 	_ "github.com/go-sql-driver/mysql"
-
 	"strconv"
 )
 
@@ -206,6 +206,16 @@ func (this *AppController) Prepare() {
 		}
 	}
 
+	//资源上限判断
+	if this.Ctx.Input.IsPost() {
+		re := regexp.MustCompile(`^/v2-beta/projects/[a-z0-9]+/service`)
+		if matched := re.MatchString(this.Ctx.Input.URL()); matched {
+			if ok := this.ResourceLimitCheck(); !ok {
+				return
+			}
+		}
+	}
+
 	this.Proxy()
 }
 
@@ -293,14 +303,246 @@ func (this *AppController) Subscribe() {
 					// if subscribe.Name == "ping" || subscribe.ResourceType == "containerEvent" || subscribe.ResourceType == "host" {
 					if subscribe.Name == "ping" {
 						subscribeMessage <- message
-						log.Printf("recv ping --------:\n %s", message)
+						//log.Printf("recv ping --------:\n %s", message)
 					} else if subscribe.Data.Resource.CompanyId == this.UserInfo.CompanyId {
+
+						// 过滤后塞ws消息
 						stringMsg := string(message)
 						stringMsg = strings.Replace(stringMsg, RancherEndpointHost, fmt.Sprintf("%s:%d", this.Ctx.Input.Host(), this.Ctx.Input.Port()), -1)
 						subscribeMessage <- []byte(stringMsg)
-						log.Printf("recv change --------:\n %s", message)
+						//log.Printf("recv change --------:\n %s", message)
+
+						//使用规格 创建 容器时，相应的数据表内容写入及更新
+						if subscribe.Data.Resource.Type == "container" && subscribe.Data.Resource.State == "starting" {
+
+							instanceIdNum := utils.IdStringToIdNumber(subscribe.Data.Resource.Id)
+							serviceIdNum := utils.IdStringToIdNumber(subscribe.Data.Resource.ServiceIds[0])
+							companyIdNum := utils.IdStringToIdNumber(subscribe.Data.Resource.CompanyId)
+							containerTypeIdNum, _ := strconv.ParseInt(subscribe.Data.Resource.Labels["bs_container_type_id"], 10, 64)
+
+							var stackIdNum int64
+							var userResourceIdNum int64
+
+							orm.Debug = true
+							o := orm.NewOrm()
+
+							//查看bs_user_resource_instance_map里面是否已经写入过数据，说明资源分配后已经被记录
+
+							sqlQueryString := fmt.Sprintf("SELECT `id` FROM `bs_user_resource_instance_map` WHERE `company_id` = %d AND `instance_id` = %d", companyIdNum, instanceIdNum)
+							var ids []int64
+
+							num, err := o.Raw(sqlQueryString).QueryRows(&ids)
+							if err != nil {
+								this.ServeError(500, err, "Internal Server Error")
+							}
+							if num == 0 {
+								//没写入过，则收集所需数据，写入bs_user_resource_instance_map
+								sqlQueryString := fmt.Sprintf("SELECT `environment_id` FROM `service` WHERE `id` = %d", serviceIdNum)
+								var stackIds []int64
+
+								num, err := o.Raw(sqlQueryString).QueryRows(&stackIds)
+
+								if err != nil || num == 0 {
+									this.ServeError(500, err, "Internal Server Error")
+								} else {
+									stackIdNum = stackIds[0]
+								}
+
+								//查出可用资源的Id
+								var userResources []models.BsUserResource
+								sqlQueryString = fmt.Sprintf("SELECT * FROM `bs_user_resource` WHERE `company_id` = %d AND `container_type_id` = %d AND `can_use` = 1 AND `idc_id` IN (SELECT `idc_id` FROM `bs_idc_host_map` WHERE `host_id` IN (SELECT `host_id` FROM `instance_host_map` WHERE `instance_id` = %d))", companyIdNum, containerTypeIdNum, instanceIdNum)
+
+								if _, err = o.Raw(sqlQueryString).QueryRows(&userResources); err != nil {
+									this.ServeError(500, err, "Internal Server Error")
+								} else {
+									userResourceIdNum = userResources[0].Id
+								}
+
+								//写入bs_user_resource_instance_map，更新bs_user_resource和bs_user_resource_total
+								o1 := orm.NewOrm()
+								sqlQueryString = fmt.Sprintf("INSERT INTO `bs_user_resource_instance_map` (`company_id`,`user_resource_id`,`instance_id`,`service_id`,`stack_id`) VALUES(%d,%d,%d,%d,%d)", companyIdNum, userResourceIdNum, instanceIdNum, serviceIdNum, stackIdNum)
+								if _, err = o1.Raw(sqlQueryString).Exec(); err != nil {
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								o2 := orm.NewOrm()
+								sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource` SET `can_use` = 0 WHERE `id`= %d", userResourceIdNum)
+								if _, err = o2.Raw(sqlQueryString).Exec(); err != nil {
+									o1.Rollback()
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								o3 := orm.NewOrm()
+								sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource_total` SET `used` = `used` + 1, `free` = `free` - 1 WHERE (`company_id`= %d AND `container_type_id` = %d AND `idc_id` = %d)", companyIdNum, containerTypeIdNum, userResources[0].IdcId)
+								if _, err = o3.Raw(sqlQueryString).Exec(); err != nil {
+									o2.Roolback()
+									o1.Roolback()
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								//更新group里stack_count和instance_count信息
+
+								var groupStackCount int = 0
+								var groupInstanceCount int = 0
+
+								var groupIds []int64
+								sqlQueryString = fmt.Sprintf("SELECT `group_id` FROM `bs_user_group_idc_map` WHERE `idc_id` = %d AND `company_id` = %d", userResources[0].IdcId, companyIdNum)
+								if _, err = o.Raw(sqlQueryString).QueryRows(&groupIds); err != nil {
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								if len(groupIds) != 0 {
+
+									//分别处理instance对应的idc所属于的每个分组（这个产品逻辑很bug）
+									for _, groupId := range groupIds {
+
+										//查值
+										var userResourceIds []int64
+										sqlQueryString = fmt.Sprintf("SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d)", companyIdNum, companyIdNum, groupId)
+										if _, err = o.Raw(sqlQueryString).QueryRows(&userResourceIds); err != nil {
+											this.ServeError(500, err, "Internal Server Error")
+										}
+
+										groupInstanceCount = len(userResourceIds)
+
+										if groupInstanceCount != 0 {
+
+											var stackIds []int64
+											sqlQueryString = fmt.Sprintf("SELECT `stack_id` FROM `bs_user_resource_instance_map` WHERE `company_id` = %d AND `user_resource_id` IN (SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d))", companyIdNum, companyIdNum, companyIdNum, groupId)
+											if _, err = o.Raw(sqlQueryString).QueryRows(&stackIds); err != nil {
+												this.ServeError(500, err, "Internal Server Error")
+											}
+
+											sidMap := make(map[int64]int)
+											for _, sid := range stackIds {
+												sidMap[sid] = 1
+											}
+
+											groupStackCount = len(sidMap)
+										}
+
+										//写库
+										sqlQueryString = fmt.Sprintf("UPDATE `bs_group` SET `stack_count` = %d, `instance_count` = %d WHERE `id`= %d", groupStackCount, groupInstanceCount, groupId)
+										if _, err = o.Raw(sqlQueryString).Exec(); err != nil {
+											this.ServeError(500, err, "Internal Server Error")
+										}
+									}
+								}
+
+								log.Printf("Event Grap --------: Id = %d	%s:	%s  serviceId = %d	stackId = %d	containerTypeId = %d", instanceIdNum, subscribe.Data.Resource.Type, subscribe.Data.Resource.State, serviceIdNum, stackIdNum, containerTypeIdNum)
+
+							} else {
+								//写入过则什么都不做
+							}
+
+							//删除 容器时，相应的数据表内容写入及更新
+						} else if subscribe.Data.Resource.Type == "container" && subscribe.Data.Resource.State == "removed" {
+
+							instanceIdNum := utils.IdStringToIdNumber(subscribe.Data.Resource.Id)
+							companyIdNum := utils.IdStringToIdNumber(subscribe.Data.Resource.CompanyId)
+
+							orm.Debug = true
+							o := orm.NewOrm()
+
+							//更新bs_user_resource中的can_use
+							var userResourceIds []int64
+							sqlQueryString := fmt.Sprintf("SELECT `user_resource_id` FROM `bs_user_resource_instance_map` WHERE `instance_id` = %d", instanceIdNum)
+							if _, err := o.Raw(sqlQueryString).QueryRows(&userResourceIds); err != nil {
+								this.ServeError(500, err, "Internal Server Error")
+							}
+
+							//没删过才删
+							if len(userResourceIds) != 0 {
+
+								o1 := orm.NewOrm()
+								sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource` SET `can_use` = 1 WHERE `id` = %d", userResourceIds[0])
+								if _, err = o1.Raw(sqlQueryString).Exec(); err != nil {
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								//更新bs_user_resource_total中的used和free
+								var userResourceTotalIds []int64
+								sqlQueryString = fmt.Sprintf("SELECT `urt`.`id` FROM `bs_user_resource_total` urt, `bs_user_resource` ur WHERE `urt`.`company_id` = `ur`.`company_id` AND `urt`.`container_type_id` = `ur`.`container_type_id` AND `urt`.`idc_id` = `ur`.`idc_id` AND `ur`.`id` = %d", userResourceIds[0])
+								if _, err := o.Raw(sqlQueryString).QueryRows(&userResourceTotalIds); err != nil {
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								o2 := orm.NewOrm()
+								sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource_total` SET `used`=`used`-1, `free`=`free`+1 WHERE `id` = %d", userResourceTotalIds[0])
+								if _, err = o2.Raw(sqlQueryString).Exec(); err != nil {
+									o1.Roolback()
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								//删除bs_user_resource_instance_map中的记录
+								o3 := orm.NewOrm()
+								sqlQueryString = fmt.Sprintf("DELETE FROM `bs_user_resource_instance_map` WHERE `instance_id` = %d", instanceIdNum)
+								if _, err = o3.Raw(sqlQueryString).Exec(); err != nil {
+									o2.Roolback()
+									o1.Roolback()
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								//更新group的stack_count和instance_count
+								var userResources []models.BsUserResource
+								sqlQueryString = fmt.Sprintf("SELECT * FROM `bs_user_resource` WHERE `id` = %d", userResourceIds[0])
+
+								if _, err = o.Raw(sqlQueryString).QueryRows(&userResources); err != nil {
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								var groupStackCount int = 0
+								var groupInstanceCount int = 0
+
+								var groupIds []int64
+								sqlQueryString = fmt.Sprintf("SELECT `group_id` FROM `bs_user_group_idc_map` WHERE `idc_id` = %d AND `company_id` = %d", userResources[0].IdcId, companyIdNum)
+								if _, err = o.Raw(sqlQueryString).QueryRows(&groupIds); err != nil {
+									this.ServeError(500, err, "Internal Server Error")
+								}
+
+								if len(groupIds) != 0 {
+
+									//分别处理instance对应的idc所属于的每个分组（这个产品逻辑很bug）
+									for _, groupId := range groupIds {
+
+										//查值
+										var userResourceIds []int64
+										sqlQueryString = fmt.Sprintf("SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d)", companyIdNum, companyIdNum, groupId)
+										if _, err = o.Raw(sqlQueryString).QueryRows(&userResourceIds); err != nil {
+											this.ServeError(500, err, "Internal Server Error")
+										}
+
+										groupInstanceCount = len(userResourceIds)
+
+										if groupInstanceCount != 0 {
+
+											var stackIds []int64
+											sqlQueryString = fmt.Sprintf("SELECT `stack_id` FROM `bs_user_resource_instance_map` WHERE `company_id` = %d AND `user_resource_id` IN (SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d))", companyIdNum, companyIdNum, companyIdNum, groupId)
+											if _, err = o.Raw(sqlQueryString).QueryRows(&stackIds); err != nil {
+												this.ServeError(500, err, "Internal Server Error")
+											}
+
+											sidMap := make(map[int64]int)
+											for _, sid := range stackIds {
+												sidMap[sid] = 1
+											}
+
+											groupStackCount = len(sidMap)
+										}
+
+										//写库
+										sqlQueryString = fmt.Sprintf("UPDATE `bs_group` SET `stack_count` = %d, `instance_count` = %d WHERE `id`= %d", groupStackCount, groupInstanceCount, groupId)
+										if _, err = o.Raw(sqlQueryString).Exec(); err != nil {
+											this.ServeError(500, err, "Internal Server Error")
+										}
+									}
+								}
+							}
+
+						}
+
 					} else {
-						log.Printf("interception change --------:\n %s", message)
+						//log.Printf("interception change --------:\n %s", message)
 					}
 				} else {
 					log.Println("read json:", err)
@@ -336,9 +578,7 @@ func (this *AppController) IdendityCheck() bool {
 	//取id和type
 	params := this.Ctx.Input.Params()
 	itemId := params["3"]
-	reg := regexp.MustCompile(`\d+`)
-	itemIdNums := reg.FindAllStringSubmatch(itemId, -1)
-	itemIdNum, _ := strconv.ParseInt(itemIdNums[1][0], 10, 64)
+	itemIdNum := utils.IdStringToIdNumber(itemId)
 
 	orm.Debug = true
 	o := orm.NewOrm()
@@ -372,6 +612,62 @@ func (this *AppController) IdendityCheck() bool {
 	} else {
 		return true
 	}
+}
+
+func (this *AppController) ResourceLimitCheck() bool {
+
+	var serviceRequestBody models.ServiceRequestBody
+
+	if err := json.Unmarshal(this.Ctx.Input.RequestBody, &serviceRequestBody); err != nil {
+		this.ServeError(404, err, "Not Found")
+		return false
+	}
+
+	containerTypeId := serviceRequestBody.LaunchConfig.Labels["bs_container_type_id"]
+	if containerTypeId == "" {
+		this.ServeErrorWithDetail(404, nil, "Not Found", "Invalid ContainerTypeId")
+		return false
+	}
+
+	idcIds := serviceRequestBody.IdcIds
+	if len(idcIds) == 0 {
+		this.ServeErrorWithDetail(404, nil, "Not Found", "Invalid IdcIds")
+		return false
+	}
+
+	orm.Debug = true
+	o := orm.NewOrm()
+
+	sqlQueryString := fmt.Sprintf("SELECT `free` FROM `bs_user_resource_total` WHERE `company_id` = %d AND `container_type_id` = %s AND `idc_id` IN (", this.UserInfo.CompanyIdNum, containerTypeId)
+
+	for i, id := range idcIds {
+		sqlQueryString = fmt.Sprintf("%s%d", sqlQueryString, id)
+
+		if i != len(idcIds)-1 {
+			sqlQueryString = fmt.Sprintf("%s,", sqlQueryString)
+		} else {
+			sqlQueryString = fmt.Sprintf("%s)", sqlQueryString)
+		}
+	}
+
+	var frees []int
+	if _, err := o.Raw(sqlQueryString).QueryRows(&frees); err != nil {
+		this.ServeError(500, err, "Internal Server Error")
+		return false
+	}
+
+	if len(frees) == 0 {
+		this.ServeErrorWithDetail(404, nil, "Not Found", "Available User Resource Not Found")
+	}
+
+	for _, free := range frees {
+		if free == 0 || free < serviceRequestBody.Scale {
+			this.ServeErrorWithDetail(404, nil, "Not Found", "Available User Resource Not Found")
+			return false
+		}
+	}
+
+	return true
 }
 
 func (this *AppController) Finish() {

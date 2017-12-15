@@ -43,7 +43,7 @@ func init() {
 	beego.Router("/v2-beta/projects/:project_id/groups/?:group_id", &controllers.GroupController{})
 	beego.Router("/v2-beta/projects/:project_id/resources/total", &controllers.BsUserResourceTotalController{})
 	beego.Router("/v2-beta/projects/:project_id/services/:service_id/groups", &controllers.GroupController{})
-	beego.Router("/v2-beta/projects/:project_id/services/:service_id/resources25319798", &controllers.ContainerTypeController{})
+	beego.Router("/v2-beta/projects/:project_id/services/:service_id/resources", &controllers.ContainerTypeController{})
 
 	beego.Router("*", &controllers.AppController{})
 
