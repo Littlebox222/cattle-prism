@@ -23,9 +23,11 @@ import (
 	"strings"
 
 	"cattle-prism/dao"
+	"encoding/base64"
 	"github.com/astaxie/beego/orm"
 	_ "github.com/go-sql-driver/mysql"
 	"strconv"
+	"sync"
 )
 
 // Operations about Users
@@ -37,6 +39,8 @@ type AppController struct {
 
 var RancherEndpointHost string
 var UserInfoCache, _ = cache.NewCache("memory", `{"interval":60}`)
+var RancherAdminApiKey string
+var RancherAdminSecretKey string
 
 func init() {
 	if RancherEndpointHost = beego.AppConfig.String("RancherEndpointHost"); RancherEndpointHost == "" {
@@ -63,6 +67,8 @@ func init() {
 	orm.RegisterModel(new(models.Environment))
 	orm.RegisterModel(new(models.Instance))
 	orm.RegisterModel(new(models.Service))
+
+	go CreateGlobleSocket()
 }
 
 func (this *AppController) ServeErrorWithDetail(status int, err error, message string, detail string) {
@@ -188,6 +194,7 @@ func (this *AppController) Prepare() {
 
 	//websocket过滤
 	if wsutil.IsWebSocketRequest(this.Ctx.Request) && this.Ctx.Input.IsGet() {
+
 		re := regexp.MustCompile(`^/v2-beta/projects/[a-z0-9]+/subscribe$`)
 		if matched := re.MatchString(this.Ctx.Input.URL()); matched {
 			// fmt.Println(this.Ctx.Input.URL())
@@ -375,8 +382,8 @@ func (this *AppController) Subscribe() {
 								o3 := orm.NewOrm()
 								sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource_total` SET `used` = `used` + 1, `free` = `free` - 1 WHERE (`company_id`= %d AND `container_type_id` = %d AND `idc_id` = %d)", companyIdNum, containerTypeIdNum, userResources[0].IdcId)
 								if _, err = o3.Raw(sqlQueryString).Exec(); err != nil {
-									o2.Roolback()
-									o1.Roolback()
+									o2.Rollback()
+									o1.Rollback()
 									this.ServeError(500, err, "Internal Server Error")
 								}
 
@@ -470,7 +477,7 @@ func (this *AppController) Subscribe() {
 								o2 := orm.NewOrm()
 								sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource_total` SET `used`=`used`-1, `free`=`free`+1 WHERE `id` = %d", userResourceTotalIds[0])
 								if _, err = o2.Raw(sqlQueryString).Exec(); err != nil {
-									o1.Roolback()
+									o1.Rollback()
 									this.ServeError(500, err, "Internal Server Error")
 								}
 
@@ -478,8 +485,8 @@ func (this *AppController) Subscribe() {
 								o3 := orm.NewOrm()
 								sqlQueryString = fmt.Sprintf("DELETE FROM `bs_user_resource_instance_map` WHERE `instance_id` = %d", instanceIdNum)
 								if _, err = o3.Raw(sqlQueryString).Exec(); err != nil {
-									o2.Roolback()
-									o1.Roolback()
+									o2.Rollback()
+									o1.Rollback()
 									this.ServeError(500, err, "Internal Server Error")
 								}
 
@@ -672,4 +679,79 @@ func (this *AppController) ResourceLimitCheck() bool {
 
 func (this *AppController) Finish() {
 
+}
+
+func CreateGlobleSocket() {
+
+	RancherAdminApiKey = beego.AppConfig.String("RancherAdminApiKey")
+	RancherAdminSecretKey = beego.AppConfig.String("RancherAdminSecretKey")
+	url := `ws://` + RancherEndpointHost + `/v2-beta/projects/1a5/subscribe?eventNames=resource.change&limit=-1&sockId=1`
+	header := http.Header{"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte(RancherAdminApiKey+":"+RancherAdminSecretKey))}}
+
+	subscribeMessage := make(chan []byte)
+
+	go SocketConnect(url, header, subscribeMessage)
+
+	for {
+		select {
+		case msg := <-subscribeMessage:
+			// log.Println("write:", msg)
+			log.Printf("%s", msg)
+		}
+	}
+}
+
+func SocketConnect(url string, header http.Header, subscribeMessage chan []byte) {
+
+	var shouldConnect bool = true
+
+	mlock := new(sync.Mutex)
+
+	for {
+		if shouldConnect {
+
+			wsClient, _, err := websocket.DefaultDialer.Dial(url, header)
+			if err != nil {
+				log.Println("read:", err)
+				continue
+			}
+
+			mlock.Lock()
+			shouldConnect = false
+			mlock.Unlock()
+
+			defer wsClient.Close()
+
+			go ReceiveSocketMessage(subscribeMessage, wsClient, &shouldConnect)
+		}
+	}
+}
+
+func ReceiveSocketMessage(messageChan chan []byte, wsClient *websocket.Conn, shouldConnect *bool) {
+
+	mlock := new(sync.Mutex)
+
+	for {
+		_, message, err := wsClient.ReadMessage()
+
+		if err != nil {
+			//错误码详见：https://github.com/gorilla/websocket/blob/23059f29570f0e13fca80ef6aea0f04c11daaa4d/conn.go
+			if websocket.IsUnexpectedCloseError(err, 1000, 1001, 1002, 1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1015) ||
+				websocket.IsCloseError(err, 1000, 1001, 1002, 1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1015) {
+
+				log.Printf("error: %v", err)
+
+				mlock.Lock()
+				*shouldConnect = true
+				mlock.Unlock()
+
+				return
+
+			} else {
+				log.Println("read:", err)
+				return
+			}
+		}
+		messageChan <- message
+	}
 }
