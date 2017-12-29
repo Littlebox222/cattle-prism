@@ -18,6 +18,18 @@ type ServiceRequestBodyLaunchConfig struct {
 	Labels map[string]string `json:labels,omitempty`
 }
 
-// type ServiceMetadata struct {
+type ServiceData struct {
+	Fields ServiceDataField `json:fields,omitempty`
+}
+
+type ServiceDataField struct {
+	Metadata map[string]string `json:metadata,omitempty`
+}
+
+// type ServiceDataFieldMetadata struct {
+// 	ContainerTypeId map[string]string `json:containerTypeId,omitempty`
+// }
+
+// type ServiceDataFieldMetadataContainerTypeId struct {
 // 	ContainerType map[string]string `json:containerType,omitempty`
 // }
