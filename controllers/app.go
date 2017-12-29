@@ -506,14 +506,15 @@ func CreateGlobleSocket() {
 					var serviceDatas []string
 					_, err := o.Raw(sqlQueryString).QueryRows(&serviceDatas)
 					if err != nil {
-						log.Println("[!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!]globel socket db err: \n", err)
-						//消息加入retry队列
+						log.Println("[globel socket db err]: \n", err)
+						continue
 					} else {
 						var serviceDataStruct models.ServiceData
 						if err := json.Unmarshal([]byte(serviceDatas[0]), &serviceDataStruct); err == nil {
-							containerTypeIdNum, _ := utils.IdStringToIdNumber(serviceDataStruct.Fields.Metadata["containerTypeId"])
+							containerTypeIdNum = utils.IdStringToIdNumber(serviceDataStruct.Fields.Metadata["containerTypeId"])
 						} else {
-							//TODO: error log
+							log.Println("[globel socket db err]: \n", err)
+							continue
 						}
 					}
 
@@ -524,8 +525,8 @@ func CreateGlobleSocket() {
 
 					num, err := o.Raw(sqlQueryString).QueryRows(&ids)
 					if err != nil {
-						//this.ServeError(500, err, "Internal Server Error")
-						//TODO: error log
+						log.Println("[globel socket db err]: \n", err)
+						continue
 					}
 					if num == 0 {
 						//没写入过，则收集所需数据，写入bs_user_resource_instance_map
@@ -535,7 +536,8 @@ func CreateGlobleSocket() {
 						num, err := o.Raw(sqlQueryString).QueryRows(&stackIds)
 
 						if err != nil || num == 0 {
-							this.ServeError(500, err, "Internal Server Error")
+							log.Println("[globel socket db err]: \n", err)
+							continue
 						} else {
 							stackIdNum = stackIds[0]
 						}
@@ -545,7 +547,8 @@ func CreateGlobleSocket() {
 						sqlQueryString = fmt.Sprintf("SELECT * FROM `bs_user_resource` WHERE `company_id` = %d AND `container_type_id` = %d AND `can_use` = 1 AND `idc_id` IN (SELECT `idc_id` FROM `bs_idc_host_map` WHERE `host_id` IN (SELECT `host_id` FROM `instance_host_map` WHERE `instance_id` = %d))", companyIdNum, containerTypeIdNum, instanceIdNum)
 
 						if _, err = o.Raw(sqlQueryString).QueryRows(&userResources); err != nil {
-							this.ServeError(500, err, "Internal Server Error")
+							log.Println("[globel socket db err]: \n", err)
+							continue
 						} else {
 							userResourceIdNum = userResources[0].Id
 						}
@@ -554,14 +557,18 @@ func CreateGlobleSocket() {
 						o1 := orm.NewOrm()
 						sqlQueryString = fmt.Sprintf("INSERT INTO `bs_user_resource_instance_map` (`company_id`,`user_resource_id`,`instance_id`,`service_id`,`stack_id`) VALUES(%d,%d,%d,%d,%d)", companyIdNum, userResourceIdNum, instanceIdNum, serviceIdNum, stackIdNum)
 						if _, err = o1.Raw(sqlQueryString).Exec(); err != nil {
-							this.ServeError(500, err, "Internal Server Error")
+							log.Println("[globel socket db err]: \n", err)
+							continue
+							//TODO: 插入retry队列
 						}
 
 						o2 := orm.NewOrm()
 						sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource` SET `can_use` = 0 WHERE `id`= %d", userResourceIdNum)
 						if _, err = o2.Raw(sqlQueryString).Exec(); err != nil {
 							o1.Rollback()
-							this.ServeError(500, err, "Internal Server Error")
+							log.Println("[globel socket db err]: \n", err)
+							continue
+							//TODO: 插入retry队列
 						}
 
 						o3 := orm.NewOrm()
@@ -569,7 +576,9 @@ func CreateGlobleSocket() {
 						if _, err = o3.Raw(sqlQueryString).Exec(); err != nil {
 							o2.Rollback()
 							o1.Rollback()
-							this.ServeError(500, err, "Internal Server Error")
+							log.Println("[globel socket db err]: \n", err)
+							continue
+							//TODO: 插入retry队列
 						}
 
 						//更新group里stack_count和instance_count信息
@@ -580,7 +589,8 @@ func CreateGlobleSocket() {
 						var groupIds []int64
 						sqlQueryString = fmt.Sprintf("SELECT `group_id` FROM `bs_user_group_idc_map` WHERE `idc_id` = %d AND `company_id` = %d", userResources[0].IdcId, companyIdNum)
 						if _, err = o.Raw(sqlQueryString).QueryRows(&groupIds); err != nil {
-							this.ServeError(500, err, "Internal Server Error")
+							//this.ServeError(500, err, "Internal Server Error")
+							//TODO: error log
 						}
 
 						if len(groupIds) != 0 {
@@ -592,7 +602,8 @@ func CreateGlobleSocket() {
 								var userResourceIds []int64
 								sqlQueryString = fmt.Sprintf("SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d)", companyIdNum, companyIdNum, groupId)
 								if _, err = o.Raw(sqlQueryString).QueryRows(&userResourceIds); err != nil {
-									this.ServeError(500, err, "Internal Server Error")
+									log.Println("[globel socket db err]: \n", err)
+									continue
 								}
 
 								groupInstanceCount = len(userResourceIds)
@@ -602,7 +613,8 @@ func CreateGlobleSocket() {
 									var stackIds []int64
 									sqlQueryString = fmt.Sprintf("SELECT `stack_id` FROM `bs_user_resource_instance_map` WHERE `company_id` = %d AND `user_resource_id` IN (SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d))", companyIdNum, companyIdNum, companyIdNum, groupId)
 									if _, err = o.Raw(sqlQueryString).QueryRows(&stackIds); err != nil {
-										this.ServeError(500, err, "Internal Server Error")
+										log.Println("[globel socket db err]: \n", err)
+										continue
 									}
 
 									sidMap := make(map[int64]int)
@@ -616,12 +628,11 @@ func CreateGlobleSocket() {
 								//写库
 								sqlQueryString = fmt.Sprintf("UPDATE `bs_group` SET `stack_count` = %d, `instance_count` = %d WHERE `id`= %d", groupStackCount, groupInstanceCount, groupId)
 								if _, err = o.Raw(sqlQueryString).Exec(); err != nil {
-									this.ServeError(500, err, "Internal Server Error")
+									log.Println("[globel socket db err]: \n", err)
+									continue
 								}
 							}
 						}
-
-						log.Printf("Event Grap --------: Id = %d	%s:	%s  serviceId = %d	stackId = %d	containerTypeId = %d", instanceIdNum, subscribe.Data.Resource.Type, subscribe.Data.Resource.State, serviceIdNum, stackIdNum, containerTypeIdNum)
 
 					} else {
 						//写入过则什么都不做
@@ -629,6 +640,116 @@ func CreateGlobleSocket() {
 
 				} else if subscribe.Data.Resource.CompanyId != "" && subscribe.Data.Resource.Type == "container" && subscribe.Data.Resource.State == "removed" {
 					//删除 容器时，相应的数据表内容写入及更新
+					instanceIdNum := utils.IdStringToIdNumber(subscribe.Data.Resource.Id)
+					companyIdNum := utils.IdStringToIdNumber(subscribe.Data.Resource.CompanyId)
+
+					orm.Debug = true
+					o := orm.NewOrm()
+
+					//更新bs_user_resource中的can_use
+					var userResourceIds []int64
+					sqlQueryString := fmt.Sprintf("SELECT `user_resource_id` FROM `bs_user_resource_instance_map` WHERE `instance_id` = %d", instanceIdNum)
+					if _, err := o.Raw(sqlQueryString).QueryRows(&userResourceIds); err != nil {
+						log.Println("[globel socket db err]: \n", err)
+						continue
+					}
+
+					//没删过才删
+					if len(userResourceIds) != 0 {
+
+						o1 := orm.NewOrm()
+						sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource` SET `can_use` = 1 WHERE `id` = %d", userResourceIds[0])
+						if _, err = o1.Raw(sqlQueryString).Exec(); err != nil {
+							log.Println("[globel socket db err]: \n", err)
+							continue
+						}
+
+						//更新bs_user_resource_total中的used和free
+						var userResourceTotalIds []int64
+						sqlQueryString = fmt.Sprintf("SELECT `urt`.`id` FROM `bs_user_resource_total` urt, `bs_user_resource` ur WHERE `urt`.`company_id` = `ur`.`company_id` AND `urt`.`container_type_id` = `ur`.`container_type_id` AND `urt`.`idc_id` = `ur`.`idc_id` AND `ur`.`id` = %d", userResourceIds[0])
+						if _, err := o.Raw(sqlQueryString).QueryRows(&userResourceTotalIds); err != nil {
+							log.Println("[globel socket db err]: \n", err)
+							continue
+						}
+
+						o2 := orm.NewOrm()
+						sqlQueryString = fmt.Sprintf("UPDATE `bs_user_resource_total` SET `used`=`used`-1, `free`=`free`+1 WHERE `id` = %d", userResourceTotalIds[0])
+						if _, err = o2.Raw(sqlQueryString).Exec(); err != nil {
+							o1.Rollback()
+							log.Println("[globel socket db err]: \n", err)
+							continue
+						}
+
+						//删除bs_user_resource_instance_map中的记录
+						o3 := orm.NewOrm()
+						sqlQueryString = fmt.Sprintf("DELETE FROM `bs_user_resource_instance_map` WHERE `instance_id` = %d", instanceIdNum)
+						if _, err = o3.Raw(sqlQueryString).Exec(); err != nil {
+							o2.Rollback()
+							o1.Rollback()
+							log.Println("[globel socket db err]: \n", err)
+							continue
+						}
+
+						//更新group的stack_count和instance_count
+						var userResources []models.BsUserResource
+						sqlQueryString = fmt.Sprintf("SELECT * FROM `bs_user_resource` WHERE `id` = %d", userResourceIds[0])
+
+						if _, err = o.Raw(sqlQueryString).QueryRows(&userResources); err != nil {
+							log.Println("[globel socket db err]: \n", err)
+							continue
+						}
+
+						var groupStackCount int = 0
+						var groupInstanceCount int = 0
+
+						var groupIds []int64
+						sqlQueryString = fmt.Sprintf("SELECT `group_id` FROM `bs_user_group_idc_map` WHERE `idc_id` = %d AND `company_id` = %d", userResources[0].IdcId, companyIdNum)
+						if _, err = o.Raw(sqlQueryString).QueryRows(&groupIds); err != nil {
+							log.Println("[globel socket db err]: \n", err)
+							continue
+						}
+
+						if len(groupIds) != 0 {
+
+							//分别处理instance对应的idc所属于的每个分组（这个产品逻辑很bug）
+							for _, groupId := range groupIds {
+
+								//查值
+								var userResourceIds []int64
+								sqlQueryString = fmt.Sprintf("SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d)", companyIdNum, companyIdNum, groupId)
+								if _, err = o.Raw(sqlQueryString).QueryRows(&userResourceIds); err != nil {
+									log.Println("[globel socket db err]: \n", err)
+									continue
+								}
+
+								groupInstanceCount = len(userResourceIds)
+
+								if groupInstanceCount != 0 {
+
+									var stackIds []int64
+									sqlQueryString = fmt.Sprintf("SELECT `stack_id` FROM `bs_user_resource_instance_map` WHERE `company_id` = %d AND `user_resource_id` IN (SELECT `id` FROM `bs_user_resource` WHERE `company_id` = %d AND `can_use` = 0 AND `idc_id` IN (SELECT `idc_id` FROM `bs_user_group_idc_map` WHERE `company_id` = %d AND `group_id` = %d))", companyIdNum, companyIdNum, companyIdNum, groupId)
+									if _, err = o.Raw(sqlQueryString).QueryRows(&stackIds); err != nil {
+										log.Println("[globel socket db err]: \n", err)
+										continue
+									}
+
+									sidMap := make(map[int64]int)
+									for _, sid := range stackIds {
+										sidMap[sid] = 1
+									}
+
+									groupStackCount = len(sidMap)
+								}
+
+								//写库
+								sqlQueryString = fmt.Sprintf("UPDATE `bs_group` SET `stack_count` = %d, `instance_count` = %d WHERE `id`= %d", groupStackCount, groupInstanceCount, groupId)
+								if _, err = o.Raw(sqlQueryString).Exec(); err != nil {
+									log.Println("[globel socket db err]: \n", err)
+									continue
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -641,7 +762,7 @@ func SocketConnect(url string, header http.Header, subscribeMessage chan []byte)
 
 	wsClient, _, err := websocket.DefaultDialer.Dial(url, header)
 	if err != nil {
-		log.Println("globel socket connect err: ", err)
+		log.Println("[globel socket connect err]: ", err)
 	}
 
 	defer wsClient.Close()
@@ -657,7 +778,7 @@ func SocketConnect(url string, header http.Header, subscribeMessage chan []byte)
 
 				wsClient, _, err := websocket.DefaultDialer.Dial(url, header)
 				if err != nil {
-					log.Println("globel socket connect err: ", err)
+					log.Println("[globel socket connect err]: ", err)
 					continue
 				}
 
@@ -679,14 +800,14 @@ func ReceiveSocketMessage(messageChan chan []byte, wsClient *websocket.Conn, con
 			if websocket.IsUnexpectedCloseError(err, 1000, 1001, 1002, 1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1015) ||
 				websocket.IsCloseError(err, 1000, 1001, 1002, 1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1015) {
 
-				log.Printf("error: %v", err)
+				log.Println("[globel socket connect err]: ", err)
 
 				connectionMessageChan <- true
 
 				return
 
 			} else {
-				log.Println("read:", err)
+				log.Println("[globel socket err]: ", err)
 				return
 			}
 		}

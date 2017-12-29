@@ -25,11 +25,3 @@ type ServiceData struct {
 type ServiceDataField struct {
 	Metadata map[string]string `json:metadata,omitempty`
 }
-
-// type ServiceDataFieldMetadata struct {
-// 	ContainerTypeId map[string]string `json:containerTypeId,omitempty`
-// }
-
-// type ServiceDataFieldMetadataContainerTypeId struct {
-// 	ContainerType map[string]string `json:containerType,omitempty`
-// }
