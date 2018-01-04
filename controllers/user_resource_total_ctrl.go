@@ -29,28 +29,34 @@ func (this *BsUserResourceTotalController) Get() {
 	o := orm.NewOrm()
 	var resourceTotal []models.BsUserResourceTotalQueryData
 
-	//查表
-	_, err := o.Raw("SELECT `rst`.`id`,`rst`.`company_id`,`rst`.`idc_id`,`rst`.`total`,`rst`.`used`,`rst`.`free`,`rst`.`container_type_id`,`ct`.`container_type_name`,`ct`.`cpu`,`ct`.`memory`,`ct`.`storage`,`idc`.`idc_name`,`idc`.`state`,`idc`.`created`,`idc`.`updated`,`idc`.`carrier_operator_id`,`co`.`carrier_operator_name`,`idc`.`area_id`,`area`.`area_name` FROM `bs_user_resource_total` rst LEFT JOIN `bs_container_type` ct ON `rst`.`container_type_id`=`ct`.`id` LEFT JOIN `bs_idc` idc ON `rst`.`idc_id`=`idc`.`id` LEFT JOIN `bs_carrier_operator` co ON `idc`.`carrier_operator_id`=`co`.`id` LEFT JOIN `bs_area` area ON `idc`.`area_id`=`area`.`id` WHERE `rst`.`company_id` = ?", this.UserInfo.CompanyIdNum).QueryRows(&resourceTotal)
-	if err != nil {
-		this.ServeError(500, err, "Internal Server Error")
-	}
+	query := this.Ctx.Input.Query("collection")
 
-	//返回值构造
-	var cattleResourceData []interface{} = make([]interface{}, len(resourceTotal))
+	if query == "idc" {
 
-	for i, resource := range resourceTotal {
+		//查表
+		_, err := o.Raw("SELECT `rst`.`id`,`rst`.`company_id`,`rst`.`idc_id`,`rst`.`total`,`rst`.`used`,`rst`.`free`,`rst`.`container_type_id`,`ct`.`container_type_name`,`ct`.`cpu`,`ct`.`memory`,`ct`.`storage`,`idc`.`idc_name`,`idc`.`state`,`idc`.`created`,`idc`.`updated`,`idc`.`carrier_operator_id`,`co`.`carrier_operator_name`,`idc`.`area_id`,`area`.`area_name` FROM `bs_user_resource_total` rst LEFT JOIN `bs_container_type` ct ON `rst`.`container_type_id`=`ct`.`id` LEFT JOIN `bs_idc` idc ON `rst`.`idc_id`=`idc`.`id` LEFT JOIN `bs_carrier_operator` co ON `idc`.`carrier_operator_id`=`co`.`id` LEFT JOIN `bs_area` area ON `idc`.`area_id`=`area`.`id` WHERE `rst`.`company_id` = ?", this.UserInfo.CompanyIdNum).QueryRows(&resourceTotal)
+		if err != nil {
+			this.ServeError(500, err, "Internal Server Error")
+		}
 
-		cattleResourceData[i] = models.BsUserResourceTotalResponseData{
-			Id:        resource.Id,
-			CompanyId: resource.CompanyId,
-			ContainerType: models.BsContainerType{
-				Id:                resource.ContainerTypeId,
-				ContainerTypeName: resource.ContainerTypeName,
-				Cpu:               resource.Cpu,
-				Memory:            resource.Memory,
-				Storage:           resource.Storage,
-			},
-			Idc: models.BsIdcResponseData{
+		resources := make(map[int64][]models.BsUserResourceTotalCollectedByContainerTypeResponseData)
+		idcs := make(map[int64]models.BsIdcResponseData)
+		for _, resource := range resourceTotal {
+
+			resources[resource.IdcId] = append(resources[resource.IdcId], models.BsUserResourceTotalCollectedByContainerTypeResponseData{
+				ContainerType: models.BsContainerType{
+					Id:                resource.ContainerTypeId,
+					ContainerTypeName: resource.ContainerTypeName,
+					Cpu:               resource.Cpu,
+					Memory:            resource.Memory,
+					Storage:           resource.Storage,
+				},
+				Total: resource.Total,
+				Used:  resource.Used,
+				Free:  resource.Free,
+			})
+
+			idcs[resource.IdcId] = models.BsIdcResponseData{
 				IdcId:   resource.IdcId,
 				IdcName: resource.IdcName,
 				CarrierOperator: models.BsCarrierOperatorResponseData{
@@ -64,33 +70,142 @@ func (this *BsUserResourceTotalController) Get() {
 				State:   resource.State,
 				Created: resource.Created,
 				Updated: resource.Updated,
-			},
-			Total: resource.Total,
-			Used:  resource.Used,
-			Free:  resource.Free,
+			}
 		}
+
+		//返回值构造
+		var cattleResourceData []interface{} = make([]interface{}, len(resources))
+		var i int = 0
+		for k, v := range resources {
+			cattleResourceData[i] = models.BsUserResourceTotalCollectedByIdcResponseData{
+				Idc:            idcs[k],
+				ContainerTypes: v,
+			}
+
+			i++
+		}
+
+		cattleResource := models.CattleResource{
+			Id:           "",
+			Type:         "resource",
+			ResourceType: "BsUserResourceTotal",
+			Links:        nil,
+			SortLinks:    nil,
+			Actions:      nil,
+			CreateTypes:  nil,
+			Data:         cattleResourceData,
+			Pagination:   models.CattlePagination{},
+			Sort:         models.CattleSort{},
+			Filters:      nil,
+		}
+
+		this.Data["json"] = cattleResource
+		this.ServeJSON()
+
+	} else if query == "containertype" {
+
+		//查表
+		_, err := o.Raw("SELECT `rst`.`container_type_id`,`ct`.`container_type_name`,`ct`.`cpu`,`ct`.`memory`,`ct`.`storage`, sum(`rst`.`total`) total, sum(`rst`.`used`) used, sum(`rst`.`free`) free FROM `bs_user_resource_total` rst LEFT JOIN `bs_container_type` ct ON `rst`.`container_type_id`=`ct`.`id` WHERE `rst`.`company_id` = ? GROUP BY `rst`.`container_type_id`", this.UserInfo.CompanyIdNum).QueryRows(&resourceTotal)
+		if err != nil {
+			this.ServeError(500, err, "Internal Server Error")
+		}
+
+		//返回值构造
+		var cattleResourceData []interface{} = make([]interface{}, len(resourceTotal))
+
+		for i, resource := range resourceTotal {
+
+			cattleResourceData[i] = models.BsUserResourceTotalCollectedByContainerTypeResponseData{
+				ContainerType: models.BsContainerType{
+					Id:                resource.ContainerTypeId,
+					ContainerTypeName: resource.ContainerTypeName,
+					Cpu:               resource.Cpu,
+					Memory:            resource.Memory,
+					Storage:           resource.Storage,
+				},
+				Total: resource.Total,
+				Used:  resource.Used,
+				Free:  resource.Free,
+			}
+		}
+
+		cattleResource := models.CattleResource{
+			Id:           "",
+			Type:         "resource",
+			ResourceType: "BsUserResourceTotal",
+			Links:        nil,
+			SortLinks:    nil,
+			Actions:      nil,
+			CreateTypes:  nil,
+			Data:         cattleResourceData,
+			Pagination:   models.CattlePagination{},
+			Sort:         models.CattleSort{},
+			Filters:      nil,
+		}
+
+		this.Data["json"] = cattleResource
+		this.ServeJSON()
+
+	} else {
+		//查表
+		_, err := o.Raw("SELECT `rst`.`id`,`rst`.`company_id`,`rst`.`idc_id`,`rst`.`total`,`rst`.`used`,`rst`.`free`,`rst`.`container_type_id`,`ct`.`container_type_name`,`ct`.`cpu`,`ct`.`memory`,`ct`.`storage`,`idc`.`idc_name`,`idc`.`state`,`idc`.`created`,`idc`.`updated`,`idc`.`carrier_operator_id`,`co`.`carrier_operator_name`,`idc`.`area_id`,`area`.`area_name` FROM `bs_user_resource_total` rst LEFT JOIN `bs_container_type` ct ON `rst`.`container_type_id`=`ct`.`id` LEFT JOIN `bs_idc` idc ON `rst`.`idc_id`=`idc`.`id` LEFT JOIN `bs_carrier_operator` co ON `idc`.`carrier_operator_id`=`co`.`id` LEFT JOIN `bs_area` area ON `idc`.`area_id`=`area`.`id` WHERE `rst`.`company_id` = ?", this.UserInfo.CompanyIdNum).QueryRows(&resourceTotal)
+		if err != nil {
+			this.ServeError(500, err, "Internal Server Error")
+		}
+
+		//返回值构造
+		var cattleResourceData []interface{} = make([]interface{}, len(resourceTotal))
+
+		for i, resource := range resourceTotal {
+
+			cattleResourceData[i] = models.BsUserResourceTotalResponseData{
+				Id:        resource.Id,
+				CompanyId: resource.CompanyId,
+				ContainerType: models.BsContainerType{
+					Id:                resource.ContainerTypeId,
+					ContainerTypeName: resource.ContainerTypeName,
+					Cpu:               resource.Cpu,
+					Memory:            resource.Memory,
+					Storage:           resource.Storage,
+				},
+				Idc: models.BsIdcResponseData{
+					IdcId:   resource.IdcId,
+					IdcName: resource.IdcName,
+					CarrierOperator: models.BsCarrierOperatorResponseData{
+						CarrierOperatorId:   resource.CarrierOperatorId,
+						CarrierOperatorName: resource.CarrierOperatorName,
+					},
+					Area: models.BsAreaResponseData{
+						AreaId:   resource.AreaId,
+						AreaName: resource.AreaName,
+					},
+					State:   resource.State,
+					Created: resource.Created,
+					Updated: resource.Updated,
+				},
+				Total: resource.Total,
+				Used:  resource.Used,
+				Free:  resource.Free,
+			}
+		}
+
+		cattleResource := models.CattleResource{
+			Id:           "",
+			Type:         "resource",
+			ResourceType: "BsUserResourceTotal",
+			Links:        nil,
+			SortLinks:    nil,
+			Actions:      nil,
+			CreateTypes:  nil,
+			Data:         cattleResourceData,
+			Pagination:   models.CattlePagination{},
+			Sort:         models.CattleSort{},
+			Filters:      nil,
+		}
+
+		this.Data["json"] = cattleResource
+		this.ServeJSON()
 	}
-
-	cattleResource := models.CattleResource{
-		Id:           "",
-		Type:         "resource",
-		ResourceType: "BsUserResourceTotal",
-		Links:        nil,
-		SortLinks:    nil,
-		Actions:      nil,
-		CreateTypes:  nil,
-		Data:         cattleResourceData,
-		Pagination:   models.CattlePagination{},
-		Sort:         models.CattleSort{},
-		Filters:      nil,
-	}
-
-	this.Data["json"] = cattleResource
-	this.ServeJSON()
-}
-
-func (this *BsUserResourceTotalController) Put() {
-
 }
 
 func (this *BsUserResourceTotalController) Post() {
@@ -238,9 +353,5 @@ func (this *BsUserResourceTotalController) Post() {
 
 	this.Data["json"] = cattleResource
 	this.ServeJSON()
-
-}
-
-func (this *BsUserResourceTotalController) Delete() {
 
 }

@@ -24,6 +24,18 @@ type BsUserResourceTotalResponseData struct {
 	Free          int               `json:free,omitempty`
 }
 
+type BsUserResourceTotalCollectedByContainerTypeResponseData struct {
+	ContainerType BsContainerType `json:containerTypeId,omitempty`
+	Total         int             `json:total,omitempty`
+	Used          int             `json:used,omitempty`
+	Free          int             `json:free,omitempty`
+}
+
+type BsUserResourceTotalCollectedByIdcResponseData struct {
+	Idc            BsIdcResponseData `json:idc,omitempty`
+	ContainerTypes []BsUserResourceTotalCollectedByContainerTypeResponseData
+}
+
 type BsUserResourceTotalQueryData struct {
 	Id                  int64     `json:id,omitempty`
 	CompanyId           int64     `json:companyId,omitempty`
